@@ -53,8 +53,10 @@ def parse_url(raw: str) -> dict | None:
     if seg and seg[0] == "users" and len(seg) > 1 and seg[1].isdigit():
         uid = seg[1]
         illus = len(seg) > 2 and seg[2] in ("illustrations", "artworks")
+        # папка-заглушка: имя автора станет известно при старте задачи →
+        # «{Имя автора}_(pixiv_{ID})»
         return {"kind": "user_illustrations" if illus else "user", "user_id": uid,
-                "key": f"user:{uid}", "label": f"Автор {uid} · иллюстрации", "folder": f"user_{uid}"}
+                "key": f"user:{uid}", "label": f"Автор {uid} · иллюстрации", "folder": f"pixiv_{uid}"}
 
     if seg and seg[0] == "artworks" and len(seg) > 1 and seg[1].isdigit():
         iid = seg[1]
@@ -152,6 +154,23 @@ class PixivClient:
                 result.append((str(iid), (work or {}).get("createDate") or ""))
         return result
 
+    def user_name(self, user_id: str) -> str | None:
+        """Имя (ник) автора из профиля; None, если получить не удалось."""
+        try:
+            data = self._json(f"{BASE}/ajax/user/{user_id}/profile/top", params={"lang": "en"})
+        except requests.RequestException:
+            return None
+        meta = ((data.get("body") or {}).get("extraData") or {}).get("meta") or {}
+        title = (meta.get("ogp") or {}).get("title") or (meta.get("twitter") or {}).get("title") or ""
+        title = title.strip()
+        if not title:
+            return None
+        # из «Name - pixiv» / «pixivでNameさんのイラスト» достаём чистое имя
+        title = re.sub(r"\s*[-–—]\s*pixiv$", "", title)
+        title = re.sub(r"^pixivで", "", title)
+        title = re.sub(r"さんの(イラスト|マンガ|小説|うごイラ)$", "", title)
+        return title.strip() or None
+
     def illust_pages(self, illust_id: str) -> list[str]:
         """Список original-URL всех страниц поста."""
         data = self._json(f"{BASE}/ajax/illust/{illust_id}/pages")
@@ -164,15 +183,16 @@ class PixivClient:
 
     # ----------------------------- разрешение ----------------------------
 
-    def resolve(self, parsed: dict) -> list[tuple[str, str]]:
+    def resolve(self, parsed: dict) -> tuple[list[tuple[str, str]], str | None]:
+        """Возвращает ([(illust_id, createDate), …], имя автора для ссылок на профиль)."""
         kind = parsed["kind"]
         if kind == "tag":
-            return self.search_illusts(parsed["tag"])
+            return self.search_illusts(parsed["tag"]), None
         if kind in ("user", "user_illustrations"):
-            return self.user_illusts(parsed["user_id"])
+            return self.user_illusts(parsed["user_id"]), self.user_name(parsed["user_id"])
         if kind == "illust":
             iid = parsed["illust_id"]
-            return [(iid, "")]
+            return [(iid, "")], None
         raise ValueError(f"Неподдерживаемый тип ссылки: {kind}")
 
 

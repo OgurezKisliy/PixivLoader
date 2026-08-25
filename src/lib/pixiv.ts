@@ -46,7 +46,9 @@ export function parsePixivUrl(raw: string): ParsedLink | null {
     return {
       kind,
       label: `Автор ${id} · иллюстрации`,
-      folder: `user_${id}`,
+      // папка-заглушка: имя автора подставится при старте задачи →
+      // «{Имя автора}_(pixiv_{ID})»
+      folder: `pixiv_${id}`,
       key: `user:${id}`,
     };
   }

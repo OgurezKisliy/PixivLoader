@@ -6,7 +6,15 @@ import { parsePixivUrl, normalizeUrl } from "./pixiv";
 const SETTINGS_KEY = "pixiv-loader-demo-settings";
 
 const DEMO_TAGS = ["初音ミク", "原神", "Fate/GrandOrder", "Blue Archive", "呪術廻戦", "崩壊：スターレイル"];
+const DEMO_ARTISTS = ["shiratama", "Aono", "Karasu", "Yumeji", "Hoshino", "Mikan", "Shigure", "Tsukimi", "Nagi", "Kobato"];
 const EXT = ["jpg", "jpg", "jpg", "png"];
+
+/** Детерминированное «имя автора» для демо по ID. */
+function demoArtistName(uid: string): string {
+  let h = 0;
+  for (const c of uid) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return DEMO_ARTISTS[h % DEMO_ARTISTS.length];
+}
 
 function rid(len: number): string {
   let s = "";
@@ -157,6 +165,16 @@ export class DemoEngine {
     task.done_files = doneFiles ?? 0;
     this.speeds.set(task.id, rand(1.8, 5.4) * 1024 * 1024);
     this.log("info", `Задача начата: «${task.label}» — получаю список иллюстраций с Pixiv…`);
+    // для ссылок на автора подставляем имя: папка «{Имя}_(pixiv_{ID})»
+    if (task.kind === "user" || task.kind === "user_illustrations") {
+      const uid = task.folder.match(/\d+/)?.[0];
+      if (uid && task.folder === `pixiv_${uid}`) {
+        const name = demoArtistName(uid);
+        task.folder = `${name}_(pixiv_${uid})`;
+        task.label = `${name} · иллюстрации`;
+        this.log("info", `Автор: ${name} — папка загрузки: ${this.settings.download_root}/pixiv/${task.folder}/`);
+      }
+    }
     this.log("info", `Найдено ${task.total_files} файлов · папка: ${this.settings.download_root}/pixiv/${task.folder}/`);
     if (this.settings.proxy) this.log("info", `Соединение через прокси ${this.settings.proxy}`);
     this.nextFile(task, true);

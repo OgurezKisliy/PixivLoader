@@ -103,7 +103,7 @@ class DownloadWorker(threading.Thread):
         if client.proxy:
             db.log("info", f"Соединение через прокси {client.proxy}")
 
-        illusts = client.resolve(parsed)
+        illusts, author = client.resolve(parsed)
         if not illusts:
             db.update_task(tid, status="error", total_files=0,
                            error="Pixiv не вернул ни одной иллюстрации (проверьте cookies/тег)")
@@ -113,8 +113,19 @@ class DownloadWorker(threading.Thread):
         # Нумерация строго от старых постов к новым: самый старый получает (1)
         illusts.sort(key=lambda x: (x[1], int(x[0])))
 
+        # Имя папки: для авторов — «{Имя автора}_(pixiv_{ID})».
+        # Имя узнаём при старте; после первого запуска оно уже сохранено в БД.
+        folder_name = task["folder"] or parsed["folder"]
+        if parsed["kind"] in ("user", "user_illustrations") and folder_name == f"pixiv_{parsed['user_id']}":
+            if author:
+                folder_name = f"{px.sanitize_folder(author)}_(pixiv_{parsed['user_id']})"
+                db.update_task(tid, folder=folder_name, label=f"{author} · иллюстрации")
+                db.log("info", f"Автор: {author} — папка загрузки: pixiv/{folder_name}/")
+            else:
+                db.log("warn", f"Имя автора {parsed['user_id']} получить не удалось — папка: pixiv/{folder_name}/")
+
         root = os.path.abspath(settings.get("download_root") or "./downloads")
-        folder = os.path.join(root, "pixiv", parsed["folder"])
+        folder = os.path.join(root, "pixiv", folder_name)
         os.makedirs(folder, exist_ok=True)
         db.log("info", f"Найдено иллюстраций: {len(illusts)} · папка: {folder}")
 

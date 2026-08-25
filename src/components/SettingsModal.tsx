@@ -91,8 +91,9 @@ export default function SettingsModal({ open, settings, onClose, onSave, onTestP
               placeholder="D:\Pixiv\downloads или ./downloads"
               spellCheck={false}
             />
-            <p className="mt-1 text-[11.5px] text-soft dark:text-faint">
-              Файлы складываются в <span className="font-mono">{"{папка}/pixiv/{тег из ссылки}/"}</span>
+            <p className="mt-1 text-[11.5px] leading-relaxed text-soft dark:text-faint">
+              Файлы складываются в <span className="font-mono">{"{папка}/pixiv/{тег из ссылки}/"}</span>,
+              для авторов — в <span className="font-mono">{"{папка}/pixiv/{Имя автора}_(pixiv_{ID})/"}</span>
             </p>
           </div>
 
