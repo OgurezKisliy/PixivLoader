@@ -7,7 +7,7 @@ const SETTINGS_KEY = "pixiv-loader-demo-settings";
 
 const DEMO_TAGS = ["初音ミク", "原神", "Fate/GrandOrder", "Blue Archive", "呪術廻戦", "崩壊：スターレイル"];
 const DEMO_ARTISTS = ["shiratama", "Aono", "Karasu", "Yumeji", "Hoshino", "Mikan", "Shigure", "Tsukimi", "Nagi", "Kobato"];
-const EXT = ["jpg", "jpg", "jpg", "png"];
+const EXT = ["jpg", "jpg", "jpg", "jpg", "png", "mp4"];
 
 /** Детерминированное «имя автора» для демо по ID. */
 function demoArtistName(uid: string): string {
@@ -248,6 +248,9 @@ export class DemoEngine {
     active.cur_bytes = Math.min(active.cur_total, active.cur_bytes + speed * 0.25);
 
     if (active.cur_bytes >= active.cur_total) {
+      if (active.cur_file.endsWith(".mp4")) {
+        this.log("info", `Конвертация ${active.cur_file} из кадров ugoira (ffmpeg)…`);
+      }
       this.log("success", `Сохранён ${active.cur_file} (${formatBytes(active.cur_total)})`);
       active.done_files += 1;
       // редкая ошибка файла: 5 попыток — и файл не скачан, но задача продолжается

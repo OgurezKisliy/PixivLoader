@@ -19,6 +19,7 @@ import traceback
 
 import db
 import pixiv_client as px
+import ugoira
 
 CHUNK = 262144
 
@@ -130,20 +131,20 @@ class DownloadWorker(threading.Thread):
         os.makedirs(folder, exist_ok=True)
         db.log("info", f"Найдено иллюстраций: {len(illusts)} · папка: {folder}")
 
-        plan: list[tuple[int, str, int, str]] = []  # (номер_файла, illust_id, страница, url)
+        plan: list[tuple] = []  # (номер_файла, illust_id, страница, url, is_ugoira, frames)
         ugoira_count = 0
         for iid, _date, itype in illusts:
             if tid in self.delete_ids or self.shutdown_evt.is_set():
                 return
-            if itype == 2:  # ugoira — анимация: скачиваем zip с кадрами, а не постер
+            if itype == 2:  # ugoira — анимация: кадры из zip → MP4-видео
                 try:
-                    zip_url = client.ugoira_src(iid)
+                    meta = client.ugoira_meta(iid)
                 except Exception as exc:  # noqa: BLE001
                     db.log("warn", f"Не удалось получить ugoira-мета поста {iid}: {exc}")
-                    zip_url = None
-                if zip_url:
+                    meta = None
+                if meta and meta["src"]:
                     ugoira_count += 1
-                    plan.append((len(plan) + 1, iid, 0, zip_url))
+                    plan.append((len(plan) + 1, iid, 0, meta["src"], True, meta["frames"]))
                 else:
                     db.log("warn", f"Ugoira {iid}: нет ссылки на архив кадров — пропускаю")
                 continue
@@ -156,17 +157,17 @@ class DownloadWorker(threading.Thread):
                 # Номер уникален для каждого файла, а не для поста:
                 # (1)_123_p0, (2)_123_p1, (3)_123_p2, (4)_456_p0, …
                 # Посты идут от старых к новым — их файлы получают младшие номера.
-                plan.append((len(plan) + 1, iid, page, url))
+                plan.append((len(plan) + 1, iid, page, url, False, None))
 
         if ugoira_count:
-            db.log("info", f"Ugoira (анимаций) в задаче: {ugoira_count} — будут скачаны как zip с кадрами")
+            db.log("info", f"Ugoira (анимаций) в задаче: {ugoira_count} — будут сконвертированы в MP4")
         db.update_task(tid, total_files=len(plan))
         db.log("info", f"Всего файлов к скачиванию: {len(plan)}")
 
         existing = set(os.listdir(folder))
         done = skipped = failed = 0
 
-        for number, iid, page, url in plan:
+        for number, iid, page, url, is_ugoira, frames in plan:
             if tid in self.delete_ids:
                 db.log("warn", f"Задача #{tid} удалена пользователем — обработка прервана")
                 return
@@ -179,7 +180,7 @@ class DownloadWorker(threading.Thread):
                 db.log("warn", f"Пауза: «{task['label']}» (обработано {done} из {len(plan)})")
                 return
 
-            ext = px.ext_from_url(url)
+            ext = "mp4" if is_ugoira else px.ext_from_url(url)
             name = f"({number})_{iid}_p{page}.{ext}"
 
             # Защита от дублей: файл с тем же {ID}_p{страница} уже есть — пропускаем
@@ -192,8 +193,11 @@ class DownloadWorker(threading.Thread):
                 db.log("warn", f"Пропущен {name} — файл уже существует (защита от дублей)")
                 continue
 
-            db.log("info", f"Скачивание {name}")
-            result = self.download_file(client, tid, folder, name, url, settings)
+            if is_ugoira:
+                result = self.fetch_ugoira(client, tid, folder, name, url, frames, settings)
+            else:
+                db.log("info", f"Скачивание {name}")
+                result = self.download_file(client, tid, folder, name, url, settings)
 
             if result == "paused":
                 db.update_task(tid, status="paused", speed=0)
@@ -209,7 +213,7 @@ class DownloadWorker(threading.Thread):
                 db.log("success", f"Сохранён {name} ({size // 1024} КБ)")
             else:  # fail
                 failed += 1
-                msg = (f"Файл {name} не скачан после {settings.get('max_retries', 5)} попыток")
+                msg = (f"Файл {name} не сохранён после {settings.get('max_retries', 5)} попыток")
                 db.update_task(tid, failed_files=failed, status="error", error=msg)
                 db.add_history(tid, iid, page, name, "", "error", 0)
                 db.log("error", msg)
@@ -291,3 +295,41 @@ class DownloadWorker(threading.Thread):
                 if attempt < max_retries:
                     time.sleep(min(1.5 * attempt, 6))
         return "fail"
+
+    # ------------------------------ ugoira -------------------------------
+
+    def fetch_ugoira(self, client: px.PixivClient, tid: int, folder: str,
+                     mp4_name: str, zip_url: str, frames: list | None,
+                     settings: dict) -> str:
+        """Ugoira → MP4: скачиваем zip с кадрами, кодируем видео (ffmpeg), zip удаляем.
+
+        Возвращает 'ok' | 'fail' | 'paused' | 'abort' — так же, как download_file.
+        Если zip уже на диске (прерванный прошлый запуск), повторная загрузка
+        не делается — сразу конвертация.
+        """
+        mp4_path = os.path.join(folder, mp4_name)
+        zip_name = mp4_name[:-4] + ".zip"
+        zip_path = os.path.join(folder, zip_name)
+
+        if os.path.exists(zip_path):
+            db.log("info", f"{zip_name} уже на диске — конвертирую без повторной загрузки")
+            dl = "ok"
+        else:
+            db.log("info", f"Скачивание {zip_name} (кадры ugoira)")
+            dl = self.download_file(client, tid, folder, zip_name, zip_url, settings)
+        if dl != "ok":
+            return dl
+
+        db.update_task(tid, cur_file=mp4_name)
+        db.log("info", f"Конвертация {zip_name} → {mp4_name} ({len(frames or [])} кадров, ffmpeg)…")
+        try:
+            ugoira.zip_to_mp4(zip_path, mp4_path, frames)
+        except Exception as exc:  # noqa: BLE001
+            db.log("error", f"Конвертация ugoira в MP4 не удалась: {exc}")
+            return "fail"
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+        db.log("info", f"{zip_name} удалён — видео сохранено как {mp4_name}")
+        return "ok"

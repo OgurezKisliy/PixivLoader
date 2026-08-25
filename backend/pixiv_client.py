@@ -208,10 +208,17 @@ class PixivClient:
         except (TypeError, ValueError):
             return 0
 
-    def ugoira_src(self, illust_id: str) -> str | None:
-        """URL zip-архива с кадрами ugoira (из /ajax/illust/{id}/ugoira_meta)."""
+    def ugoira_meta(self, illust_id: str) -> dict | None:
+        """Мета ugoira: {"src": URL zip-архива с кадрами, "frames": [{"file", "delay"}, …]}.
+
+        `delay` — длительность кадра в миллисекундах (нужна для MP4).
+        """
         data = self._json(f"{BASE}/ajax/illust/{illust_id}/ugoira_meta", params={"lang": "en"})
-        return (data.get("body") or {}).get("src") or None
+        body = data.get("body") or {}
+        src = body.get("src")
+        if not src:
+            return None
+        return {"src": src, "frames": body.get("frames") or []}
 
     # ----------------------------- разрешение ----------------------------
 
