@@ -19,6 +19,12 @@ const SAMPLE_LINKS = [
 
 const THEME_KEY = "pixiv-loader-theme";
 
+/** Обновляем состояние только при реальном изменении данных, чтобы опрос
+ *  сервера не вызывал лишних перерисовок (и не сбивал ввод в открытых окнах). */
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export default function App() {
   const [mode, setMode] = useState<"demo" | "live">("demo");
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -58,9 +64,9 @@ export default function App() {
   useEffect(() => {
     engine.subscribe((s) => {
       if (modeRef.current !== "demo") return;
-      setTasks(s.tasks);
-      setLogs(s.logs);
-      setSettings(s.settings);
+      setTasks((prev) => (sameJson(prev, s.tasks) ? prev : s.tasks));
+      setLogs((prev) => (sameJson(prev, s.logs) ? prev : s.logs));
+      setSettings((prev) => (sameJson(prev, s.settings) ? prev : s.settings));
     });
     engine.start();
     return () => engine.stop();
@@ -103,8 +109,8 @@ export default function App() {
       try {
         const [st, lg] = await Promise.all([api.state(), api.logs(lastLogId.current)]);
         if (cancelled) return;
-        setTasks(st.tasks);
-        setSettings(st.settings);
+        setTasks((prev) => (sameJson(prev, st.tasks) ? prev : st.tasks));
+        setSettings((prev) => (sameJson(prev, st.settings) ? prev : st.settings));
         if (lg.logs.length) {
           lastLogId.current = lg.logs[lg.logs.length - 1].id;
           // бэкенд отдаёт ts в unix-секундах — приводим к миллисекундам

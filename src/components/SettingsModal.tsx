@@ -19,13 +19,17 @@ export default function SettingsModal({ open, settings, onClose, onSave, onTestP
   const [test, setTest] = useState<"idle" | "busy" | "ok" | "fail">("idle");
   const [testMs, setTestMs] = useState(0);
 
+  // Форма заполняется только в момент открытия окна. Намеренно НЕ зависим от
+  // `settings`: App продолжает опрашивать сервер во время ввода, и каждое
+  // обновление пропса сбрасывало бы поля к сохранённым значениям.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (open) {
       setForm(settings);
       setProxyErr("");
       setTest("idle");
     }
-  }, [open, settings]);
+  }, [open]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
