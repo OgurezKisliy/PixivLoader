@@ -117,9 +117,13 @@ class PixivClient:
         resp.raise_for_status()
         return resp.json()
 
-    def search_illusts(self, tag: str, max_pages: int = 60) -> list[tuple[str, str]]:
-        """Поиск по тегу, все страницы. Возвращает [(illust_id, createDate), …]."""
-        result: list[tuple[str, str]] = []
+    def search_illusts(self, tag: str, max_pages: int = 60) -> list[tuple[str, str, int]]:
+        """Поиск по тегу, все страницы. Возвращает [(illust_id, createDate, illustType), …].
+
+        Результаты лежат в body.illustManga.data, идентификатор — в поле illustId.
+        illustType: 0 — иллюстрация, 1 — манга, 2 — ugoira (анимация).
+        """
+        result: list[tuple[str, str, int]] = []
         seen: set[str] = set()
         for page in range(1, max_pages + 1):
             data = self._json(
@@ -127,31 +131,46 @@ class PixivClient:
                 params={"word": tag, "order": "date_d", "mode": "all",
                         "p": page, "s_mode": "s_tag", "type": "all", "lang": "en"},
             )
-            items = (data.get("body") or {}).get("illust", {}).get("data") or []
+            body = data.get("body") or {}
+            # основной контейнер — illustManga; illust оставлен как запасной
+            items = (body.get("illustManga") or {}).get("data") \
+                or (body.get("illust") or {}).get("data") or []
             if not items:
                 break
             for it in items:
-                iid = str(it.get("id"))
-                if iid and iid not in seen:
+                iid = str(it.get("illustId") or it.get("id") or "")
+                if iid and iid.isdigit() and iid not in seen:
                     seen.add(iid)
-                    result.append((iid, it.get("createDate") or ""))
+                    try:
+                        itype = int(it.get("illustType", 0))
+                    except (TypeError, ValueError):
+                        itype = 0
+                    result.append((iid, it.get("createDate") or "", itype))
             if len(items) < 48:
                 break
         return result
 
-    def user_illusts(self, user_id: str) -> list[tuple[str, str]]:
-        """Все иллюстрации пользователя: profile/all + пакетные запросы деталей."""
+    def user_illusts(self, user_id: str) -> list[tuple[str, str, int]]:
+        """Все иллюстрации пользователя: profile/all + пакетные запросы деталей.
+
+        Возвращает [(illust_id, createDate, illustType), …].
+        """
         profile = self._json(f"{BASE}/ajax/user/{user_id}/profile/all")
         body = profile.get("body") or {}
         ids = list((body.get("illusts") or {}).keys())
-        result: list[tuple[str, str]] = []
+        result: list[tuple[str, str, int]] = []
         for i in range(0, len(ids), 48):
             chunk = ids[i:i + 48]
             query = "".join(f"ids[]={x}&" for x in chunk)
             data = self._json(f"{BASE}/ajax/user/{user_id}/illusts?{query}type=illust&lang=en")
             works = data.get("body") or {}
             for iid, work in works.items():
-                result.append((str(iid), (work or {}).get("createDate") or ""))
+                work = work or {}
+                try:
+                    itype = int(work.get("illustType", 0))
+                except (TypeError, ValueError):
+                    itype = 0
+                result.append((str(iid), work.get("createDate") or "", itype))
         return result
 
     def user_name(self, user_id: str) -> str | None:
@@ -172,7 +191,7 @@ class PixivClient:
         return title.strip() or None
 
     def illust_pages(self, illust_id: str) -> list[str]:
-        """Список original-URL всех страниц поста."""
+        """Список original-URL всех страниц поста (для ugoira вернёт только постер)."""
         data = self._json(f"{BASE}/ajax/illust/{illust_id}/pages")
         urls = []
         for page in data.get("body") or []:
@@ -181,10 +200,23 @@ class PixivClient:
                 urls.append(original)
         return urls
 
+    def illust_type(self, illust_id: str) -> int:
+        """illustType поста: 0 — иллюстрация, 1 — манга, 2 — ugoira."""
+        data = self._json(f"{BASE}/ajax/illust/{illust_id}", params={"lang": "en"})
+        try:
+            return int((data.get("body") or {}).get("illustType", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def ugoira_src(self, illust_id: str) -> str | None:
+        """URL zip-архива с кадрами ugoira (из /ajax/illust/{id}/ugoira_meta)."""
+        data = self._json(f"{BASE}/ajax/illust/{illust_id}/ugoira_meta", params={"lang": "en"})
+        return (data.get("body") or {}).get("src") or None
+
     # ----------------------------- разрешение ----------------------------
 
-    def resolve(self, parsed: dict) -> tuple[list[tuple[str, str]], str | None]:
-        """Возвращает ([(illust_id, createDate), …], имя автора для ссылок на профиль)."""
+    def resolve(self, parsed: dict) -> tuple[list[tuple[str, str, int]], str | None]:
+        """Возвращает ([(illust_id, createDate, illustType), …], имя автора для профиля)."""
         kind = parsed["kind"]
         if kind == "tag":
             return self.search_illusts(parsed["tag"]), None
@@ -192,11 +224,15 @@ class PixivClient:
             return self.user_illusts(parsed["user_id"]), self.user_name(parsed["user_id"])
         if kind == "illust":
             iid = parsed["illust_id"]
-            return [(iid, "")], None
+            try:
+                itype = self.illust_type(iid)
+            except requests.RequestException:
+                itype = 0
+            return [(iid, "", itype)], None
         raise ValueError(f"Неподдерживаемый тип ссылки: {kind}")
 
 
 def ext_from_url(url: str) -> str:
     name = url.rsplit("/", 1)[-1].split("?")[0]
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else "jpg"
-    return ext if ext in ("jpg", "jpeg", "png", "gif", "webp") else "jpg"
+    return ext if ext in ("jpg", "jpeg", "png", "gif", "webp", "zip") else "jpg"

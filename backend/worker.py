@@ -108,6 +108,7 @@ class DownloadWorker(threading.Thread):
             db.update_task(tid, status="error", total_files=0,
                            error="Pixiv не вернул ни одной иллюстрации (проверьте cookies/тег)")
             db.log("error", f"Задача «{task['label']}»: иллюстрации не найдены")
+            db.log("warn", "Подсказка: если работы 18+ или требуют входа — укажите cookies.txt в Настройках")
             return
 
         # Нумерация строго от старых постов к новым: самый старый получает (1)
@@ -130,9 +131,22 @@ class DownloadWorker(threading.Thread):
         db.log("info", f"Найдено иллюстраций: {len(illusts)} · папка: {folder}")
 
         plan: list[tuple[int, str, int, str]] = []  # (номер_файла, illust_id, страница, url)
-        for iid, _date in illusts:
+        ugoira_count = 0
+        for iid, _date, itype in illusts:
             if tid in self.delete_ids or self.shutdown_evt.is_set():
                 return
+            if itype == 2:  # ugoira — анимация: скачиваем zip с кадрами, а не постер
+                try:
+                    zip_url = client.ugoira_src(iid)
+                except Exception as exc:  # noqa: BLE001
+                    db.log("warn", f"Не удалось получить ugoira-мета поста {iid}: {exc}")
+                    zip_url = None
+                if zip_url:
+                    ugoira_count += 1
+                    plan.append((len(plan) + 1, iid, 0, zip_url))
+                else:
+                    db.log("warn", f"Ugoira {iid}: нет ссылки на архив кадров — пропускаю")
+                continue
             try:
                 urls = client.illust_pages(iid)
             except Exception as exc:  # noqa: BLE001
@@ -144,6 +158,8 @@ class DownloadWorker(threading.Thread):
                 # Посты идут от старых к новым — их файлы получают младшие номера.
                 plan.append((len(plan) + 1, iid, page, url))
 
+        if ugoira_count:
+            db.log("info", f"Ugoira (анимаций) в задаче: {ugoira_count} — будут скачаны как zip с кадрами")
         db.update_task(tid, total_files=len(plan))
         db.log("info", f"Всего файлов к скачиванию: {len(plan)}")
 
