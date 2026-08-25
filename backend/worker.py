@@ -129,8 +129,8 @@ class DownloadWorker(threading.Thread):
         os.makedirs(folder, exist_ok=True)
         db.log("info", f"Найдено иллюстраций: {len(illusts)} · папка: {folder}")
 
-        plan: list[tuple[int, str, int, str]] = []  # (номер, illust_id, страница, url)
-        for number, (iid, _date) in enumerate(illusts, start=1):
+        plan: list[tuple[int, str, int, str]] = []  # (номер_файла, illust_id, страница, url)
+        for iid, _date in illusts:
             if tid in self.delete_ids or self.shutdown_evt.is_set():
                 return
             try:
@@ -139,7 +139,10 @@ class DownloadWorker(threading.Thread):
                 db.log("warn", f"Не удалось получить страницы поста {iid}: {exc}")
                 urls = []
             for page, url in enumerate(urls):
-                plan.append((number, iid, page, url))
+                # Номер уникален для каждого файла, а не для поста:
+                # (1)_123_p0, (2)_123_p1, (3)_123_p2, (4)_456_p0, …
+                # Посты идут от старых к новым — их файлы получают младшие номера.
+                plan.append((len(plan) + 1, iid, page, url))
 
         db.update_task(tid, total_files=len(plan))
         db.log("info", f"Всего файлов к скачиванию: {len(plan)}")
